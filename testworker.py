@@ -4,59 +4,8 @@
 import os, sys, datetime
 from optparse import OptionParser
 
-from osgeo import gdal
-from gdalconst import GA_ReadOnly
 
-from workerprocessingimage import WorkerProcessingImage
-
-class WorkerLocalImage(WorkerProcessingImage):
-  def __init__(self, idWorker):
-    super(WorkerLocalImage, self).__init__( idWorker )
-    
-  def setImage(self, image):
-    self._clear()
-    self.nameImage = os.path.splitext(os.path.basename( image['name'] ) )[0]
-    msg = None
-    try:
-      self.ds = gdal.Open( image['name'], GA_ReadOnly )
-    except RuntimeError:
-      msg = gdal.GetLastErrorMsg()
-    if not msg is None:
-      return { 'isOk': False, 'msg': msg }
-    
-    self._setMetadata()
-    return { 'isOk': True }
-
-class WorkerPLScene(WorkerProcessingImage):
-  PL_API_KEY = os.environ.get('PL_API_KEY')
-  
-  def __init__(self, idWorker):
-    super(WorkerPLScene, self).__init__( idWorker )
-    
-  def setImage(self, image):
-    if self.PL_API_KEY is None:
-      msg = "API KEY for Planet Labs is not defined in host"
-      return { 'isOk': False, 'msg': msg }
-
-    self._clear()
-    self.nameImage = image['name']
-    opts = [
-      ( 'VERSION', 'V0' ),
-      ( 'API_KEY', self.PL_API_KEY ),
-      ( 'SCENE', self.nameImage ),
-      ( 'PRODUCT_TYPE', image['PRODUCT_TYPE'] )
-    ]
-    open_opts = map( lambda x: "%s=%s" % ( x[0], x[1] ), opts )
-    msg = None
-    try:
-      self.ds = gdal.OpenEx( 'PLScenes:', gdal.OF_RASTER, open_options=open_opts )
-    except RuntimeError:
-      msg = gdal.GetLastErrorMsg()
-    if not msg is None:
-      return { 'isOk': False, 'msg': msg }
-    
-    self._setMetadata()
-    return { 'isOk': True }
+from workerprocessingimage import WorkerLocalImage, WorkerPLScene
 
 def setWorkerPLScene():
   WorkerPLScene.isKilled = False
@@ -76,17 +25,24 @@ def setWorkerLocal():
   return ( WorkerLocalImage( idWorker ), image )
 
 def run(type_worker):
-  def printTime(title):
-    t = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    print "%-75s %s" % ( title, t)
+  def printTime(title, t1=None):
+    tn =datetime.datetime.now() 
+    st = tn.strftime('%Y-%m-%d %H:%M:%S')
+    stimes = st if t1 is None else  "%s %s" % ( st, str( tn - t1 ) )
+    print "%-70s %s" % ( title, stimes )
+    return tn
 
   def runAlgorithm(algorithm):
-    printTime( "Running algorithm '%s'" % algorithm['name'] ) 
+    t1 = printTime( "Running algorithm '%s'" % algorithm['name'] ) 
     vreturn = worker.run( algorithm )
+    isOk, msg = True, None
     if not vreturn['isOk']:
-      print "Error: %s" % vreturn['msg']
+      msg = vreturn['msg']
+      isOk = False
     else:
-      printTime( "Create image '%s'" % vreturn['filename'] )
+      printTime( "Create image '%s'" % vreturn['filename'], t1 )
+    
+    return { 'isOk': isOk, 'msg': msg }
 
   set_worker = { 'local': setWorkerLocal, 'pl': setWorkerPLScene }
   ( worker, image ) = set_worker[ type_worker ]()
@@ -97,9 +53,14 @@ def run(type_worker):
     print "Error: %s" % vreturn['msg']
     return
   algorithm = { 'name': 'mask', 'bands': None }  # Use last band
-  runAlgorithm( algorithm )
+  vreturn = runAlgorithm( algorithm )
+  if not vreturn['isOk']:
+    print "Error: %s" % vreturn['msg']
+    return
   algorithm = { 'name': 'normalize_difference', 'bands': [ 1, 2 ] }
-  runAlgorithm( algorithm )
+  vreturn = runAlgorithm( algorithm )
+  if not vreturn['isOk']:
+    print "Error: %s" % vreturn['msg']
 
 def main():
   usage = "usage: %prog type_worker"

@@ -3,6 +3,7 @@
 import os, struct
 
 from osgeo import gdal
+from gdalconst import GA_ReadOnly
 gdal.UseExceptions()
 gdal.PushErrorHandler('CPLQuietErrorHandler')
 gdal_sctruct_types = {
@@ -15,21 +16,21 @@ gdal_sctruct_types = {
   gdal.GDT_Float64: 'd'
 }
 
-class WorkerPoolValuesImage():
-  def __init__(self, bands, paramsRead):
+class WorkerValuesImage():
+  def __init__(self, bands, xsize):
     self.bands = bands
-    self.p = paramsRead
+    datatype = self.bands[0].DataType
+    # bandRead: nXOff, nYOff, nXSize, nYSize, nBufXSize, nBufYSize, eBufType
+    self.bandRead = [ 0, None, xsize, 1, xsize, 1, datatype ] # None replace with 'row'
+    self.fs = gdal_sctruct_types[ datatype ] * xsize
 
   def setRow(self, row):
-    self.row = row
+    self.bandRead[1] = row
 
   def getValues(self, id):
     band = self.bands[ id ]
-    xsize, ysize = self.p['xsize'], self.p['ysize']
-    d = ( self.p['xoff'], self.row, xsize, ysize, xsize, ysize, band.DataType )
-    line = band.ReadRaster( *d )
-    fs = gdal_sctruct_types[ band.DataType ] * xsize * ysize
-    values = list( struct.unpack( fs, line) )
+    line = band.ReadRaster( *self.bandRead )
+    values = list( struct.unpack( self.fs, line) )
     del line
     return values
 
@@ -65,25 +66,24 @@ class WorkerProcessingImage(object):
 
   def _processBandOut(self, ds, bands, func):
     def getValuesImage(row):
-      wpvi.setRow( row )
+      wvi.setRow( row )
       idBands = range( len( bands_img ) )
-      values_img = map( wpvi.getValues, idBands )
+      values_img = map( wvi.getValues, idBands )
       del idBands[:]
       return values_img
 
     bands_img  = [ self.ds.GetRasterBand( bands[ i ] ) for i in xrange( len( bands ) ) ]
     value_out  = [ None for i in xrange( self.metadata['x'] ) ]
     band_out = ds.GetRasterBand(1)
-    xoff, xsize, ysize = 0, self.metadata['x'], 1
-    format_struct = gdal_sctruct_types[ band_out.DataType ] * xsize * ysize
-    wpvi = WorkerPoolValuesImage( bands_img, { 'xoff': xoff, 'xsize': xsize, 'ysize': ysize } )
+    fs = gdal_sctruct_types[ band_out.DataType ] * self.metadata['x']
+    wvi = WorkerValuesImage( bands_img, self.metadata['x'] )
     for row in xrange( self.metadata['y'] ):
       values_img = getValuesImage( row )
       for i in xrange( self.metadata['x'] ):
         value_out[ i ] = func( values_img, i )
       del values_img[:]
-      line = struct.pack( format_struct, *value_out )
-      band_out.WriteRaster( xoff, row, xsize, ysize, line )
+      line = struct.pack( fs, *value_out )
+      band_out.WriteRaster( 0, row, self.metadata['x'], 1, line )
       del line
       if self.isKilled:
         break
@@ -158,3 +158,52 @@ class WorkerProcessingImage(object):
     self.algorithms[ nameAlgorithm ]['func']( ds, algorithm['bands'] )
 
     return { 'isOk': True, 'filename': filenameOut }
+
+class WorkerLocalImage(WorkerProcessingImage):
+  def __init__(self, idWorker):
+    super(WorkerLocalImage, self).__init__( idWorker )
+    
+  def setImage(self, image):
+    self._clear()
+    self.nameImage = os.path.splitext(os.path.basename( image['name'] ) )[0]
+    msg = None
+    try:
+      self.ds = gdal.Open( image['name'], GA_ReadOnly )
+    except RuntimeError:
+      msg = gdal.GetLastErrorMsg()
+    if not msg is None:
+      return { 'isOk': False, 'msg': msg }
+    
+    self._setMetadata()
+    return { 'isOk': True }
+
+class WorkerPLScene(WorkerProcessingImage):
+  PL_API_KEY = os.environ.get('PL_API_KEY')
+  
+  def __init__(self, idWorker):
+    super(WorkerPLScene, self).__init__( idWorker )
+    
+  def setImage(self, image):
+    if self.PL_API_KEY is None:
+      msg = "API KEY for Planet Labs is not defined in host"
+      return { 'isOk': False, 'msg': msg }
+
+    self._clear()
+    self.nameImage = image['name']
+    opts = [
+      ( 'VERSION', 'V0' ),
+      ( 'API_KEY', self.PL_API_KEY ),
+      ( 'SCENE', self.nameImage ),
+      ( 'PRODUCT_TYPE', image['PRODUCT_TYPE'] )
+    ]
+    open_opts = map( lambda x: "%s=%s" % ( x[0], x[1] ), opts )
+    msg = None
+    try:
+      self.ds = gdal.OpenEx( 'PLScenes:', gdal.OF_RASTER, open_options=open_opts )
+    except RuntimeError:
+      msg = gdal.GetLastErrorMsg()
+    if not msg is None:
+      return { 'isOk': False, 'msg': msg }
+    
+    self._setMetadata()
+    return { 'isOk': True }
