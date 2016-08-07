@@ -15,49 +15,23 @@ gdal_sctruct_types = {
   gdal.GDT_Float64: 'd'
 }
 
-class WorkerAlgorithmValues():
-  def __init__(self, p):
-    def getBands_Total():
-      f_grb = self.ds.GetRasterBand 
-      bands = p['numBands']
-      total = len( p['numBands'] )
-      return ( [ f_grb( bands[ i ] ) for i in xrange( total ) ], total )
-      
-    self.ds, self.alg = p['ds'], p['algorithm']
-    self.bands, self.totalBands = getBands_Total()
-    datatype = self.bands[-1].DataType
-    # dRead = nXOff, nYOff, nXSize, nYSize, nBufXSize, nBufYSize, eBufType
-    self.dRead = [
-      0, None, # Replace with row in in 'getValue'
-      p['xsize'], 1, p['xsize'], 1, datatype
-    ]
-    # fs = gdal_sctruct_type * xsize * ysize
-    self.fs = gdal_sctruct_types[ datatype ] * p['xsize']
-    self.idr, self.idx, self.idy = 1, 2, 3
-    self._getValues = None
-    self.args = [ None for i in xrange( self.totalBands ) ]
-    self.valuesAlg = [ None for i in xrange( self.dRead[ self.idx ]  ) ]
+class WorkerPoolValuesImage():
+  def __init__(self, bands, paramsRead):
+    self.bands = bands
+    self.p = paramsRead
 
-  def __del__(self):
-    for i in xrange( self.totalBands ):
-      self.bands[ i ].FlushCache()
-      self.bands[ i ] = None
-    del self.args[:]
-    del self.valuesAlg[:]
+  def setRow(self, row):
+    self.row = row
 
-  def setValuesAlg(self, row):
-    self.dRead[ self.idr ] = row
-    valuesBands = [ None for c in xrange( self.totalBands  ) ]
-    for b in xrange( self.totalBands ):
-      data = self.bands[ b ].ReadRaster( *self.dRead )
-      valuesBands[ b ] = list( struct.unpack( self.fs, data) )
-      del data
-    for x in xrange( self.dRead[ self.idx ] ):
-      for b in xrange( self.totalBands ):
-        self.args[ b ] = valuesBands[ b ][ x ]
-      self.valuesAlg[ x ] = self.alg( *self.args )
-    for b in xrange( self.totalBands ):
-      del valuesBands[ b ][:]
+  def getValues(self, id):
+    band = self.bands[ id ]
+    xsize, ysize = self.p['xsize'], self.p['ysize']
+    d = ( self.p['xoff'], self.row, xsize, ysize, xsize, ysize, band.DataType )
+    line = band.ReadRaster( *d )
+    fs = gdal_sctruct_types[ band.DataType ] * xsize * ysize
+    values = list( struct.unpack( fs, line) )
+    del line
+    return values
 
 class WorkerProcessingImage(object):
   isKilled = False
@@ -89,37 +63,49 @@ class WorkerProcessingImage(object):
     if not self.metadata is None:
       self.metadata.clear()
 
-  def _processBandOut(self, ds, numBands, algorithm):
-    params = {
-      'ds': self.ds, 'numBands': numBands, 'algorithm': algorithm,
-      'xsize': self.metadata['x']
-    }
-    wav = WorkerAlgorithmValues( params )
+  def _processBandOut(self, ds, bands, func):
+    def getValuesImage(row):
+      wpvi.setRow( row )
+      idBands = range( len( bands_img ) )
+      values_img = map( wpvi.getValues, idBands )
+      del idBands[:]
+      return values_img
+
+    bands_img  = [ self.ds.GetRasterBand( bands[ i ] ) for i in xrange( len( bands ) ) ]
+    value_out  = [ None for i in xrange( self.metadata['x'] ) ]
     band_out = ds.GetRasterBand(1)
-    # format_struct = gdal_sctruct_type * xsize * ysize
-    format_struct = gdal_sctruct_types[ band_out.DataType ] * params['xsize']
+    xoff, xsize, ysize = 0, self.metadata['x'], 1
+    format_struct = gdal_sctruct_types[ band_out.DataType ] * xsize * ysize
+    wpvi = WorkerPoolValuesImage( bands_img, { 'xoff': xoff, 'xsize': xsize, 'ysize': ysize } )
     for row in xrange( self.metadata['y'] ):
-      wav.setValuesAlg( row )
-      data = struct.pack( format_struct, *wav.valuesAlg )
-      band_out.WriteRaster( 0, row, params['xsize'], 1, data )
-      del data
+      values_img = getValuesImage( row )
+      for i in xrange( self.metadata['x'] ):
+        value_out[ i ] = func( values_img, i )
+      del values_img[:]
+      line = struct.pack( format_struct, *value_out )
+      band_out.WriteRaster( xoff, row, xsize, ysize, line )
+      del line
       if self.isKilled:
         break
+    del value_out
+    for i in xrange( len(bands) ):
+      bands_img[ i ].FlushCache()
+      bands_img[ i ] = None
     band_out.FlushCache()
     band_out = None
     ds = None
     
   def _algMask(self, ds, bands):
-    def alg(value):
-      return 255 if value > 0 else 0
-    self. _processBandOut( ds, [ self.metadata['numBands'] ], alg )
+    def func(values, i):
+      return 255 if values[0][i] > 0 else 0
+    self. _processBandOut( ds, [ self.metadata['numBands'] ], func )
   
   def _algNormDiff(self, ds, bands):
-    def alg(b1, b2):
-      vdiff = float( b1 - b2 )
-      vsum  = float( b1 + b2 )
+    def func(values, i):
+      vdiff = float( values[0][i] - values[1][i] )
+      vsum  = float( values[0][i] + values[1][i] )
       return 0.0 if vsum == 0.0 else vdiff / vsum
-    self. _processBandOut( ds, bands, alg )
+    self. _processBandOut( ds, bands, func )
 
   def _setMetadata(self):
     self.metadata = {
