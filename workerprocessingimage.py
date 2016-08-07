@@ -17,54 +17,47 @@ gdal_sctruct_types = {
 
 class WorkerAlgorithmValues():
   def __init__(self, p):
+    def getBands_Total():
+      f_grb = self.ds.GetRasterBand 
+      bands = p['numBands']
+      total = len( p['numBands'] )
+      return ( [ f_grb( bands[ i ] ) for i in xrange( total ) ], total )
+      
     self.ds, self.alg = p['ds'], p['algorithm']
-    self.dim = len( p['numBands'] )
-    self.band = self.ds.GetRasterBand( p['numBands'][-1] )
-    datatype = self.band.DataType
-    # dRead = nXOff, nYOff, nXSize, nYSize, nBufXSize, nBufYSize, eBufType, [ numBand1, numBand2, ... ]
+    self.bands, self.totalBands = getBands_Total()
+    datatype = self.bands[-1].DataType
+    # dRead = nXOff, nYOff, nXSize, nYSize, nBufXSize, nBufYSize, eBufType
     self.dRead = [
       0, None, # Replace with row in in 'getValue'
-      p['xsize'], 1, p['xsize'], 1, datatype, p['numBands']
+      p['xsize'], 1, p['xsize'], 1, datatype
     ]
-    # fs = gdal_sctruct_type * xsize * ysize * numBands
-    self.fs = gdal_sctruct_types[ datatype ] * p['xsize'] * self.dim
+    # fs = gdal_sctruct_type * xsize * ysize
+    self.fs = gdal_sctruct_types[ datatype ] * p['xsize']
     self.idr, self.idx, self.idy = 1, 2, 3
     self._getValues = None
-    if self.dim > 1:
-      self._setValues = self._setValuesBands
-    else:
-      self._setValues = self._setValuesBand
-      del self.dRead[-1]
-    self.args = [ None for b in xrange( self.dim ) ]
-    self.valuesAlg = [ None for c in xrange( self.dRead[ self.idx ]  ) ]
+    self.args = [ None for i in xrange( self.totalBands ) ]
+    self.valuesAlg = [ None for i in xrange( self.dRead[ self.idx ]  ) ]
 
   def __del__(self):
-    self.band = None
+    for i in xrange( self.totalBands ):
+      self.bands[ i ].FlushCache()
+      self.bands[ i ] = None
     del self.args[:]
     del self.valuesAlg[:]
 
-  def _setValuesBands(self, row):
-    self.dRead[ self.idr ] = row
-    data = self.ds.ReadRaster( *self.dRead )
-    values = list( struct.unpack( self.fs, data) )
-    del data
-    for c in xrange( self.dRead[ self.idx ] ):
-      for d in xrange( self.dim ):
-        self.args[ d ] = values[ c + ( d * self.dRead[ self.idx ] ) ]
-      self.valuesAlg[ c ] = self.alg( *self.args )
-    del values[:]
-    return self.valuesAlg
-
-  def _setValuesBand(self, row):
-    self.dRead[ self.idr ] = row
-    data = self.band.ReadRaster( *self.dRead )
-    values = list( struct.unpack( self.fs, data) )
-    del data
-    for c in xrange( self.dRead[ self.idx ] ):
-      self.valuesAlg[ c ] = self.alg( values[ c ] )
-
   def setValuesAlg(self, row):
-    return self._setValues( row )
+    self.dRead[ self.idr ] = row
+    valuesBands = [ None for c in xrange( self.totalBands  ) ]
+    for b in xrange( self.totalBands ):
+      data = self.bands[ b ].ReadRaster( *self.dRead )
+      valuesBands[ b ] = list( struct.unpack( self.fs, data) )
+      del data
+    for x in xrange( self.dRead[ self.idx ] ):
+      for b in xrange( self.totalBands ):
+        self.args[ b ] = valuesBands[ b ][ x ]
+      self.valuesAlg[ x ] = self.alg( *self.args )
+    for b in xrange( self.totalBands ):
+      del valuesBands[ b ][:]
 
 class WorkerProcessingImage(object):
   isKilled = False
