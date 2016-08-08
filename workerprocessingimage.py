@@ -18,23 +18,61 @@ gdal_sctruct_types = {
 
 class WorkerValuesImage():
   def __init__(self, p ):
-    self.bands = p['bands']
-    self.xb = xrange( len( self.bands ) )
+    self.ds, self.numberBands = p['ds'], p['numberBands']
+    self.xb = xrange( len( self.numberBands ) )
+    self.bands = [ self.ds.GetRasterBand( self.numberBands[ b ] ) for b in self.xb ]    
     datatype = self.bands[0].DataType
     # bandRead: nXOff, nYOff, nXSize, nYSize, nBufXSize, nBufYSize, eBufType
-    self.bandRead = [ 0, None, p['xsize'], 1, p['xsize'], 1, datatype ] # None replace with 'row'
+    self.dataRead = [ 0, None, p['xsize'], 1, p['xsize'], 1, datatype ] # None replace with 'row'
     self.idRow = 1
     self.fs = gdal_sctruct_types[ datatype ] * p['xsize']
+    self.splitValues = None
+    numBands = len( self.xb )
+    if numBands > 1:
+      self._getValues = self._getValuesBands
+      #self._getValues = self.getValues_ORIGIN
+      #return
+      self.dataRead += [ self.numberBands ]
+      self.fs *= numBands
+      self.ds = self.bands[0].GetDataset()
+      self.xsplit = xrange( 0, p['xsize'] * numBands, p['xsize'] )
+      self.splitValues = lambda l: [ l[ i : i + p['xsize'] ] for i in self.xsplit ]
+    else:
+      self._getValues = self._getValuesBand
 
-  def getValues(self, row):
+  def __del__(self):
+    for b in self.xb:
+      self.bands[ b ].FlushCache()
+      self.bands[ b ] = None
+
+  def getValues_ORIGIN(self, row):
     def getValuesImage(b):
-      line = self.bands[ b ].ReadRaster( *self.bandRead )
-      values = list( struct.unpack( self.fs, line ) )
-      del line
+      data = self.bands[ b ].ReadRaster( *self.dataRead )
+      values = list( struct.unpack( self.fs, data ) )
+      del data
       return values
 
-    self.bandRead[ self.idRow ] = row
+    self.dataRead[ self.idRow ] = row
     return map( getValuesImage, self.xb )
+
+  def _getValuesBand(self, row):
+    self.dataRead[ self.idRow ] = row
+    data = self.bands[ 0 ].ReadRaster( *self.dataRead )
+    values = list( struct.unpack( self.fs, data ) ) 
+    del data
+    return  [ values ]
+
+  def _getValuesBands(self, row):
+    self.dataRead[ self.idRow ] = row
+    data = self.ds.ReadRaster( *self.dataRead )
+    values = list( struct.unpack( self.fs, data ) )
+    del data
+    lst_values = self.splitValues( values )
+    del values[:]
+    return lst_values
+  
+  def getValues(self, row):
+    return self._getValues( row )
 
 class WorkerProcessingImage(object):
   isKilled = False
@@ -69,9 +107,8 @@ class WorkerProcessingImage(object):
   def _processBandOut(self, ds, bands, algorithm):
     xb = xrange( len( bands ) )
     xx = xrange( self.metadata['x'] )
-    bands_img  = [ self.ds.GetRasterBand( bands[ b ] ) for b in xb ]
     value_out  = [ None for x in xx ]
-    params = { 'bands': bands_img, 'xsize': self.metadata['x'] }
+    params = { 'ds': self.ds, 'numberBands': bands, 'xsize': self.metadata['x'] }
     wvi = WorkerValuesImage( params )
     band_out = ds.GetRasterBand(1)
     fs = gdal_sctruct_types[ band_out.DataType ] * self.metadata['x']
@@ -86,9 +123,7 @@ class WorkerProcessingImage(object):
       if self.isKilled:
         break
     del value_out
-    for b in xb:
-      bands_img[ b ].FlushCache()
-      bands_img[ b ] = None
+    del wvi
     band_out.FlushCache()
     band_out = None
     
