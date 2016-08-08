@@ -17,22 +17,24 @@ gdal_sctruct_types = {
 }
 
 class WorkerValuesImage():
-  def __init__(self, bands, xsize):
-    self.bands = bands
+  def __init__(self, p ):
+    self.bands = p['bands']
+    self.xb = xrange( len( self.bands ) )
     datatype = self.bands[0].DataType
     # bandRead: nXOff, nYOff, nXSize, nYSize, nBufXSize, nBufYSize, eBufType
-    self.bandRead = [ 0, None, xsize, 1, xsize, 1, datatype ] # None replace with 'row'
-    self.fs = gdal_sctruct_types[ datatype ] * xsize
+    self.bandRead = [ 0, None, p['xsize'], 1, p['xsize'], 1, datatype ] # None replace with 'row'
+    self.idRow = 1
+    self.fs = gdal_sctruct_types[ datatype ] * p['xsize']
 
-  def setRow(self, row):
-    self.bandRead[1] = row
+  def getValues(self, row):
+    def getValuesImage(b):
+      line = self.bands[ b ].ReadRaster( *self.bandRead )
+      values = list( struct.unpack( self.fs, line ) )
+      del line
+      return values
 
-  def getValues(self, id):
-    band = self.bands[ id ]
-    line = band.ReadRaster( *self.bandRead )
-    values = list( struct.unpack( self.fs, line) )
-    del line
-    return values
+    self.bandRead[ self.idRow ] = row
+    return map( getValuesImage, self.xb )
 
 class WorkerProcessingImage(object):
   isKilled = False
@@ -64,23 +66,19 @@ class WorkerProcessingImage(object):
     if not self.metadata is None:
       self.metadata.clear()
 
-  def _processBandOut(self, ds, bands, func):
-    def getValuesImage(row):
-      wvi.setRow( row )
-      idBands = range( len( bands_img ) )
-      values_img = map( wvi.getValues, idBands )
-      del idBands[:]
-      return values_img
-
-    bands_img  = [ self.ds.GetRasterBand( bands[ i ] ) for i in xrange( len( bands ) ) ]
-    value_out  = [ None for i in xrange( self.metadata['x'] ) ]
+  def _processBandOut(self, ds, bands, algorithm):
+    xb = xrange( len( bands ) )
+    xx = xrange( self.metadata['x'] )
+    bands_img  = [ self.ds.GetRasterBand( bands[ b ] ) for b in xb ]
+    value_out  = [ None for x in xx ]
+    params = { 'bands': bands_img, 'xsize': self.metadata['x'] }
+    wvi = WorkerValuesImage( params )
     band_out = ds.GetRasterBand(1)
     fs = gdal_sctruct_types[ band_out.DataType ] * self.metadata['x']
-    wvi = WorkerValuesImage( bands_img, self.metadata['x'] )
     for row in xrange( self.metadata['y'] ):
-      values_img = getValuesImage( row )
-      for i in xrange( self.metadata['x'] ):
-        value_out[ i ] = func( values_img, i )
+      values_img = wvi.getValues( row )
+      for x in xx:
+        value_out[ x ] = algorithm( values_img, x )
       del values_img[:]
       line = struct.pack( fs, *value_out )
       band_out.WriteRaster( 0, row, self.metadata['x'], 1, line )
@@ -88,12 +86,11 @@ class WorkerProcessingImage(object):
       if self.isKilled:
         break
     del value_out
-    for i in xrange( len(bands) ):
-      bands_img[ i ].FlushCache()
-      bands_img[ i ] = None
+    for b in xb:
+      bands_img[ b ].FlushCache()
+      bands_img[ b ] = None
     band_out.FlushCache()
     band_out = None
-    ds = None
     
   def _algMask(self, ds, bands):
     def func(values, i):
@@ -154,8 +151,8 @@ class WorkerProcessingImage(object):
     if ds is None:
       msg = "Error creating output image from '%s'" % self.nameImage
       return { 'isOk': False, 'msg': msg }
-    
     self.algorithms[ nameAlgorithm ]['func']( ds, algorithm['bands'] )
+    ds = None
 
     return { 'isOk': True, 'filename': filenameOut }
 

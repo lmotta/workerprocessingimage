@@ -81,3 +81,5 @@ def main():
 if __name__ == "__main__":
     sys.exit( main() )
 
+# testworker.py pl 20160421_110213_0c53
+# testworker.py local 20160421_110213_0c53.tif
