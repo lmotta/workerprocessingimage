@@ -3,7 +3,7 @@
 
 import os, sys, argparse, datetime
 
-from workerprocessingimage import WorkerLocalImage, WorkerPLScene
+from workerprocessingimage import WorkerAlgorithms, WorkerLocalImage, WorkerPLScene
 
 def setWorkerPLScene(name_image):
   WorkerPLScene.isKilled = False
@@ -57,7 +57,7 @@ def run(type_worker, name_image, subsetImage, name_algorithm, band_numbers):
 
 def main():
   type_process = ( 'local', 'pl' )
-  a_d = WorkerLocalImage.algorithms_description
+  a_d = WorkerAlgorithms.algorithms_description
   d = "Image processing local or server(Planet Labs)."
   parser = argparse.ArgumentParser(description=d )
   d = "Type of process: %s" % " or ".join( type_process )
@@ -91,7 +91,7 @@ def main():
   band_numbers = map( lambda s: int(s), values )
   
   t1 = len( band_numbers )
-  t2 = a_d[args.algorithm]['bandsTotal']
+  t2 = a_d[args.algorithm]['bandsRead']
   if not t1 == t2:
     msg = "Total of bands '%d' is greater then permited by algorithm '%s' '%d'." % ( t1, args.algorithm, t2 )
     print msg
