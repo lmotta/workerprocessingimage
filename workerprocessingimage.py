@@ -66,7 +66,6 @@ class WorkerAlgorithms():
 
   def __init__(self):
     self.metadata, self.runAlgorithm = None, None
-    self.bandsOut, self.datatype = None, None
     self.algorithms = self.algorithms_description.copy()
     self.algorithms['mask'].update(      { 'func': self._algMask } )
     self.algorithms['norm-diff'].update( { 'func': self._algNormDiff } )
