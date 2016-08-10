@@ -20,18 +20,21 @@ class WorkerValuesImage():
   def __init__(self, p ):
     band = p['ds'].GetRasterBand( p['bandNumbers'][0] )
     datatype = band.DataType
+    
+    # p['bandBlockSize'] ['x'],['y'], ['xy']
+    
     # Read Band = nXOff, nYOff, nXSize, nYSize, nBufXSize, nBufYSize, eBufType
     self.dataRead = [
-      p['xoff'], p['yoff'], p['xsize'], p['ysize'],
+      p['xoff'],  p['yoff'], p['xsize'], p['ysize'],
       p['xsize'], p['ysize'], datatype
     ]
     self.fs = gdal_sctruct_types[ datatype ] * p['xysize'] # Read Band
     self.isSrcBand, self.src = False, None
-    numBands = len( p['bandNumbers'] )
-    if numBands > 1:
+    bandTotal = len( p['bandNumbers'] )
+    if bandTotal > 1:
       self.src = p['ds']
       self.dataRead += [  p['bandNumbers'] ]
-      self.fs *= numBands
+      self.fs *= bandTotal
       band = None
     else:
       self.src = band
@@ -52,29 +55,30 @@ class WorkerProcessingImage(object):
   algorithms_description = {
     'mask': {
       'description': "Calculate the mask, 255 for pixels > 0",
-      'arguments': "Number of Band (One band)"
+      'arguments': "Number of one band",
+      'bandsTotal': 1
     },
     'norm-diff': {
       'description': "Calculate normalize difference",
-      'arguments': "Numbers of Bands for mask (Two bands)"
+      'arguments': "Numbers of two bands",
+      'bandsTotal': 2
     }
   }
 
   def __init__(self, idWorker):
     super(WorkerProcessingImage, self).__init__()
     self.idWorker = idWorker
-    self.nameImage, self.ds, self.metadata, self.bandNumbers = None, None, None, None
+    self.nameImage, self.ds, self.metadata = None, None, None
+    self.bandNumbers, self.bandBlockSize = None, None
     self.algorithms = self.algorithms_description.copy()
-    self.algorithms['mask'] = {
+    self.algorithms['mask'].update( {
         'datatype': gdal.GDT_Byte,
-        'numBands': 1,
         'func': self._algMask
-    }
-    self.algorithms['norm-diff'] = {
+    } )
+    self.algorithms['norm-diff'].update( {
         'datatype': gdal.GDT_Float32,
-        'numBands': 1,
         'func': self._algNormDiff
-      }
+    } )
   
   def __del__(self):
     self._clear()
@@ -86,10 +90,10 @@ class WorkerProcessingImage(object):
 
   def _processBandOut(self, outDS, algorithm):
     p = {
-      'ds': self.ds, 'bandNumbers': self.bandNumbers,
+      'ds': self.ds, 'bandNumbers': self.bandNumbers, 'bandBlockSize': self.bandBlockSize,
       'xsize':  self.metadata['xsize'], 'xoff': self.metadata['xoff'],
       'ysize':  self.metadata['ysize'], 'yoff': self.metadata['yoff'],
-      'xysize':  self.metadata['xysize']
+      'xysize': self.metadata['xysize']
     }
     wvi = WorkerValuesImage( p )
     imgValues = wvi.getValues()
@@ -103,7 +107,7 @@ class WorkerProcessingImage(object):
         outValues[ y * p['xsize'] + x ] = algorithm( imgValues, y, x )
     del imgValues[:]
     outBand = outDS.GetRasterBand(1)
-    fs = gdal_sctruct_types[ outBand.DataType ] * p['xysize'] * outDS.RasterCount
+    fs = gdal_sctruct_types[ outBand.DataType ] * p['xysize']
     data = struct.pack( fs, *outValues )
     del outValues[:]
     outBand.WriteRaster( 0, 0, outDS.RasterXSize, outDS.RasterYSize, data )
@@ -127,14 +131,18 @@ class WorkerProcessingImage(object):
         'transform': transform,
         'srs': self.ds.GetProjection(),
         'xsize': xsize, 'xoff': xoff, 'ysize': ysize, 'yoff': yoff,
-        'xysize': xsize * ysize, 'subset': haveSubset
+        'xysize': xsize * ysize, 'subset': haveSubset,
+        'totalbands': self.ds.RasterCount
     }
-    
+
   def _algMask(self, ds):
     def alg(values, y, x):
       # id2d = y * self.metadata['xsize'] + x
       # id3d = ( bandIndex * self.metadata['xysize'] ) + id2d
       # bandIndex = 0 -> id3d = id2d
+      #
+      # self.bandBlockSize['x'], self.bandBlockSize['y'], self.bandBlockSize['xy']
+      #
       band1 = y * self.metadata['xsize'] + x
       return 255 if values[ band1 ] > 0 else 0
     self. _processBandOut( ds, alg )
@@ -145,6 +153,9 @@ class WorkerProcessingImage(object):
       # id3d = ( bandIndex * self.metadata['xysize'] ) + id2d
       # bandIndex = 0 -> id3d = id2d
       # bandIndex = 1 -> id3d = self.metadata['xysize'] + id2d
+      #
+      # self.bandBlockSize['x'], self.bandBlockSize['y'], self.bandBlockSize['xy']
+      #
       band1 = y * self.metadata['xsize'] + x
       band2 = self.metadata['xysize'] + band1
 
@@ -160,11 +171,10 @@ class WorkerProcessingImage(object):
     # return { 'isOk': True }
 
   def run(self, algorithm):
-    
     def getNameOut():
       subset = "_subset" if self.metadata ['subset'] else ""
       bands = "-".join( map( lambda i: "B%d" % i, self.bandNumbers ) )
-      d = ( self.nameImage, subset, nameAlgorithm, bands, self.idWorker )
+      d = ( self.nameImage, subset, algorithm['name'], bands, self.idWorker )
       return "%s%s_%s_%s_work%d.tif" % d
    
     def createDSOut():
@@ -176,9 +186,9 @@ class WorkerProcessingImage(object):
           os.remove( aux )
      
       removeOut()
-      numBands = self.algorithms[ nameAlgorithm ]['numBands']
-      datatype = self.algorithms[ nameAlgorithm ]['datatype']
-      d = ( filenameOut, self.metadata['xsize'], self.metadata['ysize'], numBands, datatype )
+      bandsTotal = self.algorithms[ algorithm['name'] ]['bandsTotal']
+      datatype = self.algorithms[ algorithm['name'] ]['datatype']
+      d = ( filenameOut, self.metadata['xsize'], self.metadata['ysize'], bandsTotal, datatype )
       ds = None
       try:
         ds = self.driverTif.Create( *d )
@@ -187,24 +197,38 @@ class WorkerProcessingImage(object):
       ds.SetProjection( self.metadata['srs'] )
       ds.SetGeoTransform( self.metadata['transform'] )
       return ds
-      
-    nameAlgorithm = algorithm['name']
-    if not nameAlgorithm in self.algorithms.keys():
-      return { 'isOk': False, 'msg': "Not found algorithm '%s'" % algorithm }
-    if self.nameImage is None:
-      return { 'isOk': False, 'msg': "Need set image for running" }
-    
-    if algorithm['bandNumbers'] is None:
-      self.bandNumbers = [ self.ds.RasterCount ]
-    else:
-      self.bandNumbers = algorithm['bandNumbers']
+  
+    for i in xrange( len( algorithm['bandNumbers'] ) ):
+      bn = algorithm['bandNumbers'][ i ]
+      if bn > self.metadata['totalbands']:
+        msg = "Band '%d' is greater than total of bands '%d'" % ( bn, self.metadata['totalbands'] )
+        return { 'isOk': False, 'msg': msg }
+    self.bandNumbers = algorithm['bandNumbers']
 
     filenameOut = getNameOut()
     ds = createDSOut()
     if ds is None:
       msg = "Error creating output image from '%s'" % self.nameImage
       return { 'isOk': False, 'msg': msg }
-    self.algorithms[ nameAlgorithm ]['func']( ds )
+
+    bandBlockSizes = map( lambda b: ds.GetRasterBand( b ).GetBlockSize(), self.bandNumbers )
+    totalbands = len( bandBlockSizes )
+    if totalbands > 1:
+      sumX, sumY = 0, 0
+      for i in xrange( len( bandBlockSizes ) ):
+        sumX += bandBlockSizes[ i ][0]
+        sumY += bandBlockSizes[ i ][1]
+      if not sumX  == totalbands * bandBlockSizes[0][0] or not sumY  == totalbands * bandBlockSizes[0][1]:
+        msg = ",".join( map( lambda b: str(b), self.bandNumbers ) )
+        msg = "Bands '%s' of image '%s' have different block sizes" % ( msg, self.nameImage )
+        return { 'isOk': False, 'msg': msg }
+    self.bandBlockSize = {
+      'x':  bandBlockSizes[0][0],
+      'y':  bandBlockSizes[0][1],
+      'xy': bandBlockSizes[0][0] * bandBlockSizes[0][1]
+    }
+    
+    self.algorithms[ algorithm['name'] ]['func']( ds )
 
     ds = None
     return { 'isOk': True, 'filename': filenameOut }
@@ -214,6 +238,29 @@ class WorkerLocalImage(WorkerProcessingImage):
     super(WorkerLocalImage, self).__init__( idWorker )
     
   def setImage(self, image, subset):
+    def checkSubset():
+      def checkOutX():
+        size = self.ds.RasterXSize
+        for i in ( 1, 2 ):
+          s = subset[ "x%d" % i ]
+          if s > size:
+            msg = "Coordinate X%d '%d' is greater then number of columns '%d'" % ( i, s, size)
+            return { 'isOk': False, 'msg': msg }
+        return { 'isOk': True }
+      def checkOutY():
+        size = self.ds.RasterYSize
+        for i in ( 1, 2 ):
+          s = subset[ "y%d" % i ]
+          if s > size:
+            msg = "Coordinate Y%d '%d' is greater then number of lines '%d'" % ( i, s, size)
+            return { 'isOk': False, 'msg': msg}
+        return { 'isOk': True }
+      
+      vreturn = checkOutX()
+      if not vreturn['isOk']:
+        return vreturn
+      return checkOutY()
+
     self._clear()
     self.nameImage = os.path.splitext(os.path.basename( image['name'] ) )[0]
     msg = None
@@ -224,6 +271,11 @@ class WorkerLocalImage(WorkerProcessingImage):
     if not msg is None:
       return { 'isOk': False, 'msg': msg }
     
+    if not subset is None:
+      vreturn = checkSubset()
+      if not vreturn['isOk']:
+        return vreturn
+
     self._setMetadata( subset )
     return { 'isOk': True }
 

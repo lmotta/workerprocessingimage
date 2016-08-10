@@ -45,48 +45,83 @@ def run(type_worker, name_image, subsetImage, name_algorithm, band_numbers):
   set_worker = { 'local': setWorkerLocal, 'pl': setWorkerPLScene }
   ( worker, image ) = set_worker[ type_worker ]( name_image )
 
-  printTime( "Setting Dataset '%s'(worker %s)" % ( image['name'], type_worker ) )
+  printTime( "Setting Dataset '%s'('%s')" % ( image['name'], type_worker ) )
   vreturn = worker.setImage( image, subsetImage )
   if not vreturn['isOk']:
     print "Error: %s" % vreturn['msg']
     return
-  algorithm = { 'name': name_algorithm, 'bandNumbers': band_numbers }
-  vreturn = runAlgorithm( algorithm )
+  vreturn = runAlgorithm( { 'name': name_algorithm, 'bandNumbers': band_numbers } )
   if not vreturn['isOk']:
     print "Error: %s" % vreturn['msg']
     return
 
 def main():
-  # https://docs.python.org/2/library/argparse.html#module-argparse
+  type_process = ( 'local', 'pl' )
   a_d = WorkerLocalImage.algorithms_description
-  descs = []
-  for k in a_d.keys():
-    desc = "%s: %s - Arguments: %s" % ( k, a_d[ k ]['description'], a_d[ k ]['arguments'] )
-    descs.append( desc)
-  description = "Image processing local or server(Planet labs)\n%s" % "\n".join( descs )
-  parser = argparse.ArgumentParser(description=description)
-  parser.add_argument('type_process', metavar='type_process', type=str, help="Type of process('local' or 'pl')" )
-  parser.add_argument('namescene', metavar='name_scene', type=str, help='Name of scene(add extension for local)' )
-  parser.add_argument('algorithm', metavar='algorithm', type=str, help="Name of algorithm(%s)" % ''.join( a_d.keys() ) )
-  
-  
+  d = "Image processing local or server(Planet Labs)."
+  parser = argparse.ArgumentParser(description=d )
+  d = "Type of process: %s" % " or ".join( type_process )
+  parser.add_argument('type_process', metavar='type_process', type=str, help=d )
+  d = 'Name of scene(add extension for local)'
+  parser.add_argument('namescene', metavar='name_scene', type=str, help=d )
+  d = "Name of algorithm: %s" % ','.join( a_d.keys() )
+  parser.add_argument('algorithm', metavar='algorithm', type=str, help=d )
+  d = "Number of bands(separated by comma and no spaces). Ex.: 1,2,3"
+  parser.add_argument('bands', metavar='bands', type=str, help=d )
+  d = "Two coordinates of image(separated by comma). Ex.: x1,y1,x2,y2"
+  parser.add_argument('-s', metavar='subset', dest='subset', type=str, help=d )
+
   args = parser.parse_args()
-  if not args.type_process in ( 'local', 'pl'):
-    print "Type of processing '%s' not valid." % args.type_process 
-    print parser.description
+  if not args.type_process in type_process:
+    print "Type of processing '%s' not valid. Valids types: %s" % ( args.type_process, " or ".join( type_process ) )
     return 1
   if not args.algorithm in a_d.keys():
-    print "Type of algorithm '%s' not valid." % args.type_process 
-    print parser.description
+    print "Type of algorithm '%s' not valid." % args.algorithm 
+    descs = []
+    for k in a_d.keys():
+      desc = "'%s': %s - %s" % ( k, a_d[k]['description'], a_d[k]['arguments'] ) 
+      descs.append( desc )
+    print  'Valids types:\n'.join(descs)
     return 1
+  values = args.bands.split(',')
+  for i in xrange( len( values ) ):
+    if not values[ i ].isdigit():
+      print "Band '%s' is not a number." % values[ i ]
+      return 1
+  band_numbers = map( lambda s: int(s), values )
+  
+  t1 = len( band_numbers )
+  t2 = a_d[args.algorithm]['bandsTotal']
+  if not t1 == t2:
+    msg = "Total of bands '%d' is greater then permited by algorithm '%s' '%d'." % ( t1, args.algorithm, t2 )
+    print msg
+    return 1
+      
+  subsetImage = None
+  if not args.subset is None:
+    values = args.subset.split(',')
+    for i in xrange( len( values ) ):
+      if not values[ i ].isdigit():
+        print "Coordinate '%s' is not a number." % values[ i ]
+        return 1
+    coords = map( lambda s: int(s), values )
+    if not len( coords ) == 4:
+      print "Need four coordinates for subset '-s', receive '%d' coordinates." % len( coords )
+      return 1
+    subsetImage = { 'x1': coords[0], 'y1': coords[1], 'x2': coords[2], 'y2': coords[3] }
+    if subsetImage['x1'] > subsetImage['x2']:
+      print "Coordinate x1 '%d' is greater then x2 '%d'." % ( subsetImage['x1'], subsetImage['x2'] )
+      return 1
+    if subsetImage['y1'] > subsetImage['y2']:
+      print "Coordinate y1 '%d' is greater then y2 '%d'." % ( subsetImage['y1'], subsetImage['y2'] )
+      return 1
+    if subsetImage['x1'] == subsetImage['x2']:
+      print "Coordinate x1 '%d' is equal to x2 '%d'." % ( subsetImage['x1'], subsetImage['x2'] )
+      return 1
+    if subsetImage['y1'] == subsetImage['y2']:
+      print "Coordinate y1 '%d' is equal to y2 '%d'." % ( subsetImage['y1'], subsetImage['y2'] )
+      return 1
 
-  #subsetImage = None # { }
-  subsetImage = { 'x1': 1862, 'y1': 1840, 'x2': 2048, 'y2': 2024 }
-  v_band_numbers = {
-    'mask': None, # Get last
-    'norm-diff': [ 1, 2 ] 
-  }
-  band_numbers = v_band_numbers[ args.algorithm ]
   return run( args.type_process, args.namescene, subsetImage, args.algorithm, band_numbers )
 
 if __name__ == "__main__":
