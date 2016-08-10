@@ -100,8 +100,6 @@ class WorkerAlgorithms():
     self.metadata = metadata # xsize, xysize
 
   def setAlgorithm(self, name):
-    self.bandsOut = self.algorithms[ name ]['bandsOut']
-    self.datatype  = self.algorithms[ name ]['datatype']
     self.runAlgorithm = self.algorithms[ name ]['func']
 
   def run(self, values, y, x):
@@ -228,12 +226,11 @@ class WorkerProcessingImage(object):
         if os.path.exists( aux ):
           os.remove( aux )
 
-      self.wAlgorithm.setAlgorithm( algorithm['name'] )
-
+      dataAlg = WorkerAlgorithms.algorithms_description[ algorithm['name'] ]
       removeOut()
       d = (
         filenameOut, self.metadata['xsize'], self.metadata['ysize'],
-        self.wAlgorithm.bandsOut, self.wAlgorithm.datatype
+        dataAlg['bandsOut'], dataAlg['datatype']
       )
       ds = None
       try:
@@ -243,37 +240,62 @@ class WorkerProcessingImage(object):
       ds.SetProjection( self.metadata['srs'] )
       ds.SetGeoTransform( self.metadata['transform'] )
       return ds
-  
-    for i in xrange( len( algorithm['bandNumbers'] ) ):
-      bn = algorithm['bandNumbers'][ i ]
-      if bn > self.metadata['totalbands']:
-        msg = "Band '%d' is greater than total of bands '%d'" % ( bn, self.metadata['totalbands'] )
-        return { 'isOk': False, 'msg': msg }
+
+    def checkBandNumbersAlgorithm():
+      for i in xrange( len( algorithm['bandNumbers'] ) ):
+        bn = algorithm['bandNumbers'][ i ]
+        if bn > self.metadata['totalbands']:
+          msg = "Band '%d' is greater than total of bands '%d'" % ( bn, self.metadata['totalbands'] )
+          return { 'isOk': False, 'msg': msg }
+      return { 'isOk': True }
+
+    def checkBandBlockSizes(bands):
+      bandBlockSizes = map( lambda b: b.GetBlockSize(), bands )
+      sizeX, sizeY = bandBlockSizes[ 0 ][ 0 ], bandBlockSizes[ 0 ][ 1 ]
+      for i in xrange( 1, len( bandBlockSizes ) ):
+        if sizeX != bandBlockSizes[ i ][ 0 ] or sizeY != bandBlockSizes[ i ][ 1 ]:
+          msg = ",".join( map( lambda b: str(b), self.bandNumbers ) )
+          msg = "Bands '%s' of image '%s' have different block sizes" % ( msg, self.nameImage )
+          return { 'isOk': False, 'msg': msg }
+      return { 'isOk': True }
+
+    def checkBandDatatypes(bands):
+      datatypes = map( lambda b: b.DataType, bands )
+      datatype = datatypes[0]
+      for i in xrange( 1, len( datatypes) ):
+        if datatype != datatypes[ i ]:
+          msg = ",".join( map( lambda b: str(b), self.bandNumbers ) )
+          msg = "Bands '%s' of image '%s' have different data types" % ( msg, self.nameImage )
+          return { 'isOk': False, 'msg': msg }
+      return { 'isOk': True }
+
+    vreturn = checkBandNumbersAlgorithm()
+    if not vreturn['isOk']:
+      return vreturn
     self.bandNumbers = algorithm['bandNumbers']
+
+    bands = map( lambda b: self.ds.GetRasterBand( b ), self.bandNumbers )
+    self.bandBlockSizes = bands[0].GetBlockSize()
+    self.datatype = bands[0].DataType
+    bandTotal = len( bands )
+    if bandTotal > 1: 
+      vreturn = checkBandBlockSizes( bands )
+      if not vreturn['isOk']:
+        del bands[:]
+        return vreturn
+      vreturn = checkBandDatatypes( bands )
+      if not vreturn['isOk']:
+        del bands[:]
+        return vreturn
+    del bands[:]
 
     filenameOut = getNameOut()
     ds = createDSOut()
     if ds is None:
       msg = "Error creating output image from '%s'" % self.nameImage
       return { 'isOk': False, 'msg': msg }
-
-    bandBlockSizes = map( lambda b: self.ds.GetRasterBand( b ).GetBlockSize(), self.bandNumbers )
-    totalbands = len( bandBlockSizes )
-    if totalbands > 1:
-      sumX, sumY = 0, 0
-      for i in xrange( len( bandBlockSizes ) ):
-        sumX += bandBlockSizes[ i ][0]
-        sumY += bandBlockSizes[ i ][1]
-      if not sumX  == totalbands * bandBlockSizes[0][0] or not sumY  == totalbands * bandBlockSizes[0][1]:
-        msg = ",".join( map( lambda b: str(b), self.bandNumbers ) )
-        msg = "Bands '%s' of image '%s' have different block sizes" % ( msg, self.nameImage )
-        return { 'isOk': False, 'msg': msg }
-    self.bandBlockSize = {
-      'x':  bandBlockSizes[0][0],
-      'y':  bandBlockSizes[0][1],
-      'xy': bandBlockSizes[0][0] * bandBlockSizes[0][1]
-    }
     
+    self.wAlgorithm.setAlgorithm( algorithm['name'] )
     self._processBandOut( ds )
 
     ds = None
