@@ -142,6 +142,8 @@ class WorkerProcessingImage(object):
     }
     wvi = WorkerValuesImage( p )
     outBand = outDS.GetRasterBand(1)
+    outBand.SetNoDataValue( 0)
+    
     fs = gdal_sctruct_types[ outBand.DataType ] * p['xsize']
     outValues = p['xsize'] * [ None ]
     xx = xrange( p['xsize'] )
@@ -166,10 +168,10 @@ class WorkerProcessingImage(object):
     def setMetadata():
       xoff, xsize, yoff, ysize = 0, self.ds.RasterXSize, 0, self.ds.RasterYSize
       transform = self.ds.GetGeoTransform()
-      haveSubset = False 
+      haveSubset = False
       if not subset is None:
-        xoff,  yoff  = subset['x1'], subset['y1']
-        xsize, ysize = subset['x2'] - subset['x1'] + 1, subset['y2'] - subset['y1'] + 1
+        xoff,  yoff  = subset['x_UL'], subset['y_UL']
+        xsize, ysize = subset['x_BR'] - subset['x_UL'], subset['y_BR'] - subset['y_UL']
         lt = list( transform )
         lt[0] += xoff * transform[1]
         lt[3] += yoff * transform[5]
@@ -185,32 +187,25 @@ class WorkerProcessingImage(object):
       self.wAlgorithm.setMetadata( { 'xsize': xsize, 'ysize': ysize } )
 
     def checkSubset():
-      def checkOutX():
-        size = self.ds.RasterXSize
-        for i in ( 1, 2 ):
-          s = subset[ "x%d" % i ]
+      def checkOut(size, tcoord, title):
+        for c in ( 'UL', 'BR' ):
+          s = subset[ "%s_%s" % ( tcoord, c )]
           if s > size:
-            msg = "Coordinate X%d '%d' is greater then number of columns '%d'" % ( i, s, size)
+            data = ( tcoord, c, s, title, size  )
+            msg = "Coordinate %s_%s '%d' is greater than number of %s '%d'" % data
             return { 'isOk': False, 'msg': msg }
         return { 'isOk': True }
-      def checkOutY():
-        size = self.ds.RasterYSize
-        for i in ( 1, 2 ):
-          s = subset[ "y%d" % i ]
-          if s > size:
-            msg = "Coordinate Y%d '%d' is greater then number of lines '%d'" % ( i, s, size)
-            return { 'isOk': False, 'msg': msg}
-        return { 'isOk': True }
-      
-      vreturn = checkOutX()
+
+      vreturn = checkOut( self.ds.RasterXSize, 'x', "columns" )
       if not vreturn['isOk']:
         return vreturn
-      return checkOutY()
+      return checkOut( self.ds.RasterXSize, 'y', "lines")
     
     if not subset is None:
       vreturn = checkSubset()
       if not vreturn['isOk']:
         return vreturn
+
     setMetadata()
     return { 'isOk': True }
   
@@ -302,7 +297,7 @@ class WorkerProcessingImage(object):
     filenameOut = getNameOut()
     ds = createDSOut()
     if ds is None:
-      msg = "Error creating output image from '%s'" % self.nameImage
+      msg = "Creating output image from '%s'" % self.nameImage
       return { 'isOk': False, 'msg': msg }
     
     self.wAlgorithm.setAlgorithm( algorithm['name'] )
