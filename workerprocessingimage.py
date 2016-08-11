@@ -24,29 +24,38 @@ class WorkerValuesImage():
     # p['bandBlockSize'] ['x'],['y'], ['xy']
     
     # Read Band = nXOff, nYOff, nXSize, nYSize, nBufXSize, nBufYSize, eBufType
-    self.dataRead = [
-      p['xoff'],  p['yoff'], p['xsize'], p['ysize'],
-      p['xsize'], p['ysize'], datatype
-    ]
-    self.fs = gdal_sctruct_types[ datatype ] * p['xysize'] # Read Band
-    self.isSrcBand, self.src = False, None
+    # Read One Line
+    self.dataRead = [ p['xoff'],  None, p['xsize'], 1, p['xsize'], 1, datatype ]
+    self.fs = gdal_sctruct_types[ datatype ] * p['xsize']
+    self.isSrcBand, self.src, self._getValues = False, None, None
     bandTotal = len( p['bandNumbers'] )
     if bandTotal > 1:
       self.src = p['ds']
       self.dataRead += [  p['bandNumbers'] ]
       self.fs *= bandTotal
+      self._getValues = self._getValues2d
       band = None
     else:
       self.src = band
+      self._getValues = self._getValues1d
       self.isSrcBand = True
 
-  def getValues(self):
-    data = self.src.ReadRaster( *self.dataRead )
+  def __del__(self):
     if self.isSrcBand:
       self.src = None
-    values = list( struct.unpack( self.fs, data ) )
-    del data
-    return values
+    del self.fs
+  
+  def _getValues2d(self, data):
+     l = list( struct.unpack( self.fs, data ) )
+     n = self.dataRead[ 2 ] # xsize
+     return [ l [ i : i + n ] for i in xrange( 0, len( l ), n ) ] # [ [band1], ..., [band2] ]
+
+  def _getValues1d(self, data):
+    return [ list( struct.unpack( self.fs, data ) ) ] # [ [band1] ]
+
+  def getValues(self, row):
+    self.dataRead[1] = row
+    return self._getValues( self.src.ReadRaster( *self.dataRead ) ) 
 
 class WorkerAlgorithms():
   algorithms_description = {
@@ -70,29 +79,15 @@ class WorkerAlgorithms():
     self.algorithms['mask'].update(      { 'func': self._algMask } )
     self.algorithms['norm-diff'].update( { 'func': self._algNormDiff } )
 
-  def _algMask(self, values, y, x):
-    # id2d = y * self.metadata['xsize'] + x
-    # id3d = ( bandIndex * self.metadata['xysize'] ) + id2d
-    # bandIndex = 0 -> id3d = id2d
-    #
-    # self.bandBlockSize['x'], self.bandBlockSize['y'], self.bandBlockSize['xy']
-    #
-    band1 = y * self.metadata['xsize'] + x
-    return 255 if values[ band1 ] > 0 else 0
+  def _algMask(self, values, x):
+    band1 = values[ 0 ]
+    return 255 if band1[ x ] > 0 else 0
 
-  def _algNormDiff(self, values, y, x):
-    # id2d = y * self.metadata['xsize'] + x
-    # id3d = ( bandIndex * self.metadata['xysize'] ) + id2d
-    # bandIndex = 0 -> id3d = id2d
-    # bandIndex = 1 -> id3d = self.metadata['xysize'] + id2d
-    #
-    # self.bandBlockSize['x'], self.bandBlockSize['y'], self.bandBlockSize['xy']
-    #
-    band1 = y * self.metadata['xsize'] + x
-    band2 = self.metadata['xysize'] + band1
-
-    vdiff = float( values[ band1 ] - values[ band2 ] )
-    vsum  = float( values[ band1 ] + values[ band2 ] )
+  def _algNormDiff(self, values, x):
+    band1 = values[ 0 ]
+    band2 = values[ 1 ]
+    vdiff = float( band1[ x ] - band2[ x ] )
+    vsum  = float( band1[ x ] + band2[ x ] )
     return 0.0 if vsum == 0.0 else vdiff / vsum
 
   def setMetadata(self, metadata):
@@ -101,8 +96,8 @@ class WorkerAlgorithms():
   def setAlgorithm(self, name):
     self.runAlgorithm = self.algorithms[ name ]['func']
 
-  def run(self, values, y, x):
-    return self.runAlgorithm( values, y, x )
+  def run(self, values, x):
+    return self.runAlgorithm( values, x )
 
 class WorkerProcessingImage(object):
   isKilled = False
@@ -125,6 +120,7 @@ class WorkerProcessingImage(object):
       self.metadata.clear()
 
   def _processBandOut(self, outDS):
+    linesRead = 1
     p = {
       'ds': self.ds, 'bandNumbers': self.bandNumbers, 'bandBlockSize': self.bandBlockSize,
       'xsize':  self.metadata['xsize'], 'xoff': self.metadata['xoff'],
@@ -132,24 +128,26 @@ class WorkerProcessingImage(object):
       'xysize': self.metadata['xysize']
     }
     wvi = WorkerValuesImage( p )
-    imgValues = wvi.getValues()
-    del wvi
-    outValues = p['xysize'] * [ None ]
+    outBand = outDS.GetRasterBand(1)
+    fs = gdal_sctruct_types[ outBand.DataType ] * p['xsize']
+    outValues = p['xsize'] * [ None ]
     xx = xrange( p['xsize'] )
     for y in xrange( p['ysize'] ):
+      imgValues = wvi.getValues( y ) # [ [ band 1 ], ...,[ band N ] ]
       if self.isKilled:
+        del imgValues[:]
         break
       for x in xx:
-        outValues[ y * p['xsize'] + x ] = self.wAlgorithm.run( imgValues, y, x )
-    del imgValues[:]
-    outBand = outDS.GetRasterBand(1)
-    fs = gdal_sctruct_types[ outBand.DataType ] * p['xysize']
-    data = struct.pack( fs, *outValues )
+        outValues[ x ] = self.wAlgorithm.run( imgValues, x )
+      del imgValues[:]
+      data = struct.pack( fs, *outValues )
+      outBand.WriteRaster( 0, y, outDS.RasterXSize, 1, data )
+      del data
     del outValues[:]
-    outBand.WriteRaster( 0, 0, outDS.RasterXSize, outDS.RasterYSize, data )
-    del data
+    del fs
     outBand.FlushCache()
     outBand = None
+    del wvi
 
   def _endSetImage(self, subset):
     def setMetadata():
@@ -171,7 +169,7 @@ class WorkerProcessingImage(object):
           'xysize': xsize * ysize, 'subset': haveSubset,
           'totalbands': self.ds.RasterCount
       }
-      self.wAlgorithm.setMetadata( { 'xsize': xsize, 'xysize': xsize * ysize } )
+      self.wAlgorithm.setMetadata( { 'xsize': xsize, 'ysize': ysize } )
 
     def checkSubset():
       def checkOutX():

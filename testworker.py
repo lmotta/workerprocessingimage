@@ -93,7 +93,7 @@ def main():
   t1 = len( band_numbers )
   t2 = a_d[args.algorithm]['bandsRead']
   if not t1 == t2:
-    msg = "Total of bands '%d' is greater then permited by algorithm '%s' '%d'." % ( t1, args.algorithm, t2 )
+    msg = "Total of bands '%d' is different of permited by algorithm '%s' '%d'." % ( t1, args.algorithm, t2 )
     print msg
     return 1
       
