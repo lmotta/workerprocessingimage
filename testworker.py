@@ -1,5 +1,18 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
+"""
+/***************************************************************************
+Name                 : Processing image framework
+Description          : Processing image framework
+Arguments            : Georeferencing Image local or Planet Labs
+
+                       -------------------
+begin                : 2016-08-11
+copyright            : (C) 2016 by Luiz Motta
+email                : motta dot luiz at gmail.com
+
+ ***************************************************************************/
+"""
 
 import os, sys, argparse, datetime
 
@@ -126,6 +139,3 @@ def main():
 
 if __name__ == "__main__":
     sys.exit( main() )
-
-# testworker.py pl 20160421_110213_0c53
-# testworker.py local 20160421_110213_0c53.tif

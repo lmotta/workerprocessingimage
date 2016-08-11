@@ -1,4 +1,17 @@
 # -*- coding: utf-8 -*-
+"""
+/***************************************************************************
+Name                 : Processing image framework
+Description          : Processing image framework
+Arguments            : Georeferencing Image local or Planet Labs
+
+                       -------------------
+begin                : 2016-08-11
+copyright            : (C) 2016 by Luiz Motta
+email                : motta dot luiz at gmail.com
+
+ ***************************************************************************/
+"""
 
 import os, struct
 
