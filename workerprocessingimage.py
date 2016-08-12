@@ -38,7 +38,9 @@ class WorkerValuesImage():
     
     # Read Band = nXOff, nYOff, nXSize, nYSize, nBufXSize, nBufYSize, eBufType
     # Read One Line
+    # xoff, yoff, xsize, xsize --> Use for Subset
     self.dataRead = [ p['xoff'],  None, p['xsize'], 1, p['xsize'], 1, datatype ]
+    self.yoff = p['yoff'] # Subset
     self.fs = gdal_sctruct_types[ datatype ] * p['xsize']
     self.isSrcBand, self.src, self._getValues = False, None, None
     bandTotal = len( p['bandNumbers'] )
@@ -60,14 +62,14 @@ class WorkerValuesImage():
   
   def _getValues2d(self, data):
      l = list( struct.unpack( self.fs, data ) )
-     n = self.dataRead[ 2 ] # xsize
+     n = self.dataRead[ 2 ] #  self.dataRead[ 2 ] = xsize
      return [ l [ i : i + n ] for i in xrange( 0, len( l ), n ) ] # [ [band1], ..., [band2] ]
 
   def _getValues1d(self, data):
     return [ list( struct.unpack( self.fs, data ) ) ] # [ [band1] ]
 
   def getValues(self, row):
-    self.dataRead[1] = row
+    self.dataRead[1] = self.yoff + row
     return self._getValues( self.src.ReadRaster( *self.dataRead ) ) 
 
 class WorkerAlgorithms():
@@ -133,7 +135,6 @@ class WorkerProcessingImage(object):
       self.metadata.clear()
 
   def _processBandOut(self, outDS):
-    linesRead = 1
     p = {
       'ds': self.ds, 'bandNumbers': self.bandNumbers, 'bandBlockSize': self.bandBlockSize,
       'xsize':  self.metadata['xsize'], 'xoff': self.metadata['xoff'],
@@ -142,13 +143,11 @@ class WorkerProcessingImage(object):
     }
     wvi = WorkerValuesImage( p )
     outBand = outDS.GetRasterBand(1)
-    outBand.SetNoDataValue( 0)
-    
     fs = gdal_sctruct_types[ outBand.DataType ] * p['xsize']
     outValues = p['xsize'] * [ None ]
     xx = xrange( p['xsize'] )
     for y in xrange( p['ysize'] ):
-      imgValues = wvi.getValues( y ) # [ [ band 1 ], ...,[ band N ] ]
+      imgValues = wvi.getValues( y ) # [ [ band 1 ], ...,[ band N ] ], Use xoff and yoff for Subset
       if self.isKilled:
         del imgValues[:]
         break
@@ -160,6 +159,7 @@ class WorkerProcessingImage(object):
       del data
     del outValues[:]
     del fs
+    outBand.SetNoDataValue( 0 )
     outBand.FlushCache()
     outBand = None
     del wvi
@@ -180,7 +180,7 @@ class WorkerProcessingImage(object):
       self.metadata = {
           'transform': transform,
           'srs': self.ds.GetProjection(),
-          'xsize': xsize, 'xoff': xoff, 'ysize': ysize, 'yoff': yoff,
+          'xoff': xoff, 'yoff': yoff, 'xsize': xsize,'ysize': ysize,
           'xysize': xsize * ysize, 'subset': haveSubset,
           'totalbands': self.ds.RasterCount
       }
