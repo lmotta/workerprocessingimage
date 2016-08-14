@@ -23,7 +23,7 @@ email                : motta dot luiz at gmail.com
  ***************************************************************************/
 """
 
-import os, sys,multiprocessing, argparse, struct 
+import os, sys, multiprocessing, argparse, struct 
 
 from osgeo import gdal
 from gdalconst import GA_ReadOnly
@@ -85,16 +85,21 @@ class WorkerReadRowBand():
     
   @staticmethod
   def getBandRows(values):
-    return map( lambda v: v[1], sorted( lambda v1,v2: v1[0] < v2[0], values ) )  
+    return map( lambda v: v[1], sorted( values, key=lambda v: v[0] ) )  
 
 def run(filename):
-  def printValues( r, valuesRowBands ):
-    print r, len( valuesRowBands ) 
+  def algNormDiff( values, x ):
+    band1 = values[ 0 ]
+    band2 = values[ 1 ]
+    vdiff = float( band1[ x ] - band2[ x ] )
+    vsum  = float( band1[ x ] + band2[ x ] )
+    return 0.0 if vsum == 0.0 else vdiff / vsum
 
   ds = gdal.Open( filename, GA_ReadOnly )
   bandNumbers = [1,2]
   worker = WorkerReadRowBand( ds, bandNumbers )
-  vreturn = worker.setData( { 'xoff': 0, 'yoff': 0, 'xsize': 50 } )
+  xsize = 50
+  vreturn = worker.setData( { 'xoff': 0, 'yoff': 0, 'xsize': xsize } )
   if not vreturn['isOk']:
     print vreturn['msg']
     return
@@ -105,6 +110,8 @@ def run(filename):
     return
 
   xb = xrange( len( bandNumbers ) )
+  xx = xrange( xsize)
+  outValues = xsize * [ None ]
   values = []
   for r in xrange( totalRow ):
     pool = multiprocessing.Pool()
@@ -113,9 +120,11 @@ def run(filename):
     pool.close()
     pool.join()
     pool = None
-    printValues( r, values )
+    for x in xx:
+      outValues[ x ] = algNormDiff( WorkerReadRowBand.getBandRows( values ) , x )
     del values[:]
 
+  del outValues[:]
   ds = None
   del worker
 
