@@ -16,7 +16,7 @@ email                : motta dot luiz at gmail.com
 
 import os, sys, argparse, datetime
 
-from processingimage import CollectionAlgorithms, LocalImage, PLScene
+from processingimage import RegionImage, CollectionAlgorithms, LocalImage, PLScene
 
 def setPLScene(name_image):
   PLScene.isKilled = False
@@ -35,7 +35,7 @@ def setLocal(name_image):
   idWorker = 1
   return ( LocalImage( idWorker ), image )
 
-def run(processing_type, name_image, subsetImage, name_algorithm, band_numbers):
+def run(processing_type, name_image, name_algorithm, band_numbers, wkt):
   def printTime(title, t1=None):
     tn =datetime.datetime.now() 
     st = tn.strftime('%Y-%m-%d %H:%M:%S')
@@ -59,7 +59,7 @@ def run(processing_type, name_image, subsetImage, name_algorithm, band_numbers):
   ( imageProcessing, image ) = set_processing[ processing_type ]( name_image )
 
   printTime( "Setting Dataset '%s'('%s')" % ( image['name'], processing_type ) )
-  vreturn = imageProcessing.setImage( image, subsetImage )
+  vreturn = imageProcessing.setImage( image, wkt )
   if not vreturn['isOk']:
     print "Error: %s" % vreturn['msg']
     return
@@ -81,8 +81,8 @@ def main():
   parser.add_argument('algorithm', metavar='algorithm', type=str, help=d )
   d = "Number of bands(separated by comma and no spaces). Ex.: 1,2"
   parser.add_argument('bands', metavar='bands', type=str, help=d )
-  d = "Two coordinates, Upper Left and Bottom Right, separated by comma. Ex.: x_UL, y_UL, x_BR,y_BR"
-  parser.add_argument('-s', metavar='subset', dest='subset', type=str, help=d )
+  d = "WKT(between double quotes) for region. Use EPSG 4326 for SRS" 
+  parser.add_argument('-w', metavar='WKT_Region', dest='wkt4326', type=str, help=d)
 
   args = parser.parse_args()
   if not args.processing_type in processing_types:
@@ -110,26 +110,11 @@ def main():
     print msg
     return 1
       
-  subsetImage = None
-  if not args.subset is None:
-    values = args.subset.split(',')
-    for i in xrange( len( values ) ):
-      if not values[ i ].isdigit():
-        print "Coordinate '%s' is not a number." % values[ i ]
-        return 1
-    coords = map( lambda s: int(s), values )
-    if not len( coords ) == 4:
-      print "Need four coordinates for subset '-s', receive '%d' coordinates." % len( coords )
-      return 1
-    subsetImage = { 'x_UL': coords[0], 'y_UL': coords[1], 'x_BR': coords[2], 'y_BR': coords[3] }
-    if subsetImage['x_UL'] >= subsetImage['x_BR']:
-      print "Coordinate x_UL '%d' is greater or equal than x_BR '%d'." % ( subsetImage['x_UL'], subsetImage['x_BR'] )
-      return 1
-    if subsetImage['y_UL'] >= subsetImage['y_BR']:
-      print "Coordinate y_UL '%d' is greater or equal than y_BR '%d'." % ( subsetImage['y_UL'], subsetImage['y_BR'] )
-      return 1
+  if not args.wkt4326 is None and not RegionImage.isValidGeom( args.wkt4326 ): 
+    print "The WKT '%s' not valid." % args.wkt4326
+    return 1
 
-  return run( args.processing_type, args.namescene, subsetImage, args.algorithm, band_numbers )
+  return run( args.processing_type, args.namescene, args.algorithm, band_numbers, args.wkt4326 )
 
 if __name__ == "__main__":
     sys.exit( main() )

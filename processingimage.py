@@ -13,9 +13,9 @@ email                : motta dot luiz at gmail.com
  ***************************************************************************/
 """
 
-import os, struct
+import os, struct, math
 
-from osgeo import gdal
+from osgeo import gdal, ogr, osr
 from gdalconst import GA_ReadOnly
 gdal.UseExceptions()
 gdal.PushErrorHandler('CPLQuietErrorHandler')
@@ -28,6 +28,93 @@ gdal_sctruct_types = {
   gdal.GDT_Float32: 'f',
   gdal.GDT_Float64: 'd'
 }
+
+class RegionImage():
+  def __init__(self, ds):
+    self.ds = ds
+    self.ulImage, self.resImage = None, None
+  
+  def _getGeom(self):
+    def getWktBBox( UL, BR):
+      coords = [ ( UL['x'], UL['y'] ), ( BR['x'], UL['y'] ), ( BR['x'], BR['y'] ), ( UL['x'], BR['y'] ), ( UL['x'], UL['y'] ) ]
+      coords = map( lambda c: "%f %f" % ( c[0], c[1] ), coords)
+      return "POLYGON (( %s ))" % ','.join( coords )
+
+    transform = self.ds.GetGeoTransform()
+    self.ulImage  = { 'x': transform[0], 'y': transform[3] }
+    self.resImage = { 'x': transform[1], 'y': transform[5] }
+    xsize, ysize = self.ds.RasterXSize, self.ds.RasterYSize
+    BR = { 'x': self.ulImage['x'] + transform[1] * xsize, 'y': self.ulImage['y'] + transform[5] * ysize }
+    wktGeom = getWktBBox( self.ulImage, BR )
+    
+    wktSRS = self.ds.GetProjectionRef()
+    if wktSRS == '':
+      return { 'isOk': False, 'msg': "Image not have Spatial Reference" }
+
+    sr = osr.SpatialReference()
+    sr.ImportFromWkt( wktSRS )
+    geom = ogr.CreateGeometryFromWkt( wktGeom )
+    geom.AssignSpatialReference( sr )
+    
+    return { 'isOk': True, 'geom': geom }
+
+  def getSubset(self, wkt4326):
+    def getGeomWkt4326():
+      geom = ogr.CreateGeometryFromWkt( wkt4326 )
+      sr = osr.SpatialReference()
+      sr.ImportFromEPSG( 4326 )
+      geom.AssignSpatialReference( sr )
+      geom.TransformTo( geomImg.GetSpatialReference() )
+      
+      return geom
+
+    def getPixelCoordinate(x, y):
+      self.ulImage, self.resImage
+      xCell = ( x - self.ulImage['x'] ) / self.resImage['x'] 
+      yCell = ( y - self.ulImage['y'] ) / self.resImage['y']
+      
+      return { 'x': int( math.ceil( xCell ) ), 'y': int( math.ceil( yCell ) ) }
+
+    vreturn = self._getGeom()
+    if not vreturn['isOk']:
+      print msg
+      return
+    geomImg = vreturn['geom']
+    geom = getGeomWkt4326()
+    msg = "Wkt Geom not intersect with image:\nWkt '%s'\nImage = '%s'" % ( wkt4326, self.ds.GetDescription() )
+    if not geomImg.Intersect( geom ):
+      geomImg.Destroy()
+      geom.Destroy()
+      return { 'isOk': False, 'msg': msg }
+    geomRegion = geomImg.Intersection( geom )
+    geomImg.Destroy()
+    geom.Destroy()
+    if not geomRegion.GetDimension() == 2:
+      geomRegion.Destroy()
+      return { 'isOk': False, 'msg': msg }
+
+    ( minX, maxX, minY, maxY )= geomRegion.GetEnvelope()
+    geomRegion.Destroy()
+    
+    ul = getPixelCoordinate( minX, maxY )
+    br = getPixelCoordinate( maxX, minY )
+    subset = {
+      'x_UL': ul['x'], 'y_UL': ul['y'],
+      'x_BR': br['x'], 'y_BR': br['y'],
+    }
+
+    return { 'isOk': True, 'subset': subset }
+
+  @staticmethod
+  def isValidGeom(wkt4326):
+    try:
+      geom = ogr.CreateGeometryFromWkt( wkt4326 )
+    except RuntimeError:
+      pass # The exception not enter here, but, not show GDAL message!
+    if geom is None:
+      return False
+    geom.Destroy()
+    return True
 
 class ImageLineValues():
   def __init__(self, p ):
@@ -156,7 +243,7 @@ class ProcessingImage(object):
     outBand = None
     del wvi
 
-  def _endSetImage(self, subset):
+  def _endSetImage(self, wkt):
     def setMetadata():
       xoff, xsize, yoff, ysize = 0, self.ds.RasterXSize, 0, self.ds.RasterYSize
       transform = self.ds.GetGeoTransform()
@@ -176,25 +263,15 @@ class ProcessingImage(object):
           'subset': haveSubset, 'totalbands': self.ds.RasterCount
       }
 
-    def checkSubset():
-      def checkOut(size, tcoord, title):
-        for c in ( 'UL', 'BR' ):
-          s = subset[ "%s_%s" % ( tcoord, c )]
-          if s > size:
-            data = ( tcoord, c, s, title, size  )
-            msg = "Coordinate %s_%s '%d' is greater than number of %s '%d'" % data
-            return { 'isOk': False, 'msg': msg }
-        return { 'isOk': True }
 
-      vreturn = checkOut( self.ds.RasterXSize, 'x', "columns" )
+    if not wkt is None:
+      ri = RegionImage( self.ds )
+      vreturn = ri.getSubset( wkt )
       if not vreturn['isOk']:
         return vreturn
-      return checkOut( self.ds.RasterXSize, 'y', "lines")
-    
-    if not subset is None:
-      vreturn = checkSubset()
-      if not vreturn['isOk']:
-        return vreturn
+      subset = vreturn['subset']
+    else:
+      subset = None
 
     setMetadata()
     return { 'isOk': True }
