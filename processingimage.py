@@ -29,16 +29,10 @@ gdal_sctruct_types = {
   gdal.GDT_Float64: 'd'
 }
 
-class WorkerValuesImage():
+class ImageLineValues():
   def __init__(self, p ):
-    band = p['ds'].GetRasterBand( p['bandNumbers'][0] )
+    band = p['ds'].GetRasterBand( p['bandNumbers'][0] ) # See self.src
     datatype = band.DataType
-    
-    # p['bandBlockSize'] ['x'],['y'], ['xy']
-    
-    # Read Band = nXOff, nYOff, nXSize, nYSize, nBufXSize, nBufYSize, eBufType
-    # Read One Line
-    # xoff, yoff, xsize, xsize --> Use for Subset
     self.dataRead = [ p['xoff'],  None, p['xsize'], 1, p['xsize'], 1, datatype ]
     self.yoff = p['yoff'] # Subset
     self.fs = gdal_sctruct_types[ datatype ] * p['xsize']
@@ -72,8 +66,8 @@ class WorkerValuesImage():
     self.dataRead[1] = self.yoff + row
     return self._getValues( self.src.ReadRaster( *self.dataRead ) ) 
 
-class WorkerAlgorithms():
-  algorithms_description = {
+class CollectionAlgorithms():
+  descriptions = {
     'mask': {
       'description': "Calculate the mask, 255 for pixels > 0",
       'arguments': "Number of one band",
@@ -89,10 +83,14 @@ class WorkerAlgorithms():
   }
 
   def __init__(self):
-    self.metadata, self.runAlgorithm = None, None
-    self.algorithms = self.algorithms_description.copy()
-    self.algorithms['mask'].update(      { 'func': self._algMask } )
-    self.algorithms['norm-diff'].update( { 'func': self._algNormDiff } )
+    self.runAlgorithm = None
+    self.algorithms = self.descriptions.copy()
+    algs = (
+      ( 'mask', self._algMask ),
+      ( 'norm-diff', self._algNormDiff )
+    )
+    for item in algs:
+      self.algorithms[ item[0] ].update( { 'func': item[1] } )
 
   def _algMask(self, values, x):
     band1 = values[ 0 ]
@@ -105,26 +103,23 @@ class WorkerAlgorithms():
     vsum  = float( band1[ x ] + band2[ x ] )
     return 0.0 if vsum == 0.0 else vdiff / vsum
 
-  def setMetadata(self, metadata):
-    self.metadata = metadata # xsize, xysize
-
   def setAlgorithm(self, name):
     self.runAlgorithm = self.algorithms[ name ]['func']
 
   def run(self, values, x):
     return self.runAlgorithm( values, x )
 
-class WorkerProcessingImage(object):
+class ProcessingImage(object):
   isKilled = False
   driverMem = gdal.GetDriverByName('MEM')
   driverTif = gdal.GetDriverByName('GTiff')
 
   def __init__(self, idWorker):
-    super(WorkerProcessingImage, self).__init__()
+    super(ProcessingImage, self).__init__()
     self.idWorker = idWorker
-    self.wAlgorithm = WorkerAlgorithms()
+    self.wAlgorithm = CollectionAlgorithms()
     self.nameImage, self.ds, self.metadata = None, None, None
-    self.bandNumbers, self.bandBlockSize = None, None
+    self.bandNumbers = None
   
   def __del__(self):
     self._clear()
@@ -135,18 +130,15 @@ class WorkerProcessingImage(object):
       self.metadata.clear()
 
   def _processBandOut(self, outDS):
-    p = {
-      'ds': self.ds, 'bandNumbers': self.bandNumbers, 'bandBlockSize': self.bandBlockSize,
-      'xsize':  self.metadata['xsize'], 'xoff': self.metadata['xoff'],
-      'ysize':  self.metadata['ysize'], 'yoff': self.metadata['yoff'],
-      'xysize': self.metadata['xysize']
-    }
-    wvi = WorkerValuesImage( p )
+    p = { 'ds': self.ds, 'bandNumbers': self.bandNumbers }
+    for key in ( 'xoff', 'yoff', 'xsize' ):
+      p[ key ] = self.metadata[ key ]  
+    wvi = ImageLineValues( p )
     outBand = outDS.GetRasterBand(1)
     fs = gdal_sctruct_types[ outBand.DataType ] * p['xsize']
     outValues = p['xsize'] * [ None ]
     xx = xrange( p['xsize'] )
-    for y in xrange( p['ysize'] ):
+    for y in xrange( self.metadata['ysize'] ):
       imgValues = wvi.getValues( y ) # [ [ band 1 ], ...,[ band N ] ], Use xoff and yoff for Subset
       if self.isKilled:
         del imgValues[:]
@@ -181,10 +173,8 @@ class WorkerProcessingImage(object):
           'transform': transform,
           'srs': self.ds.GetProjection(),
           'xoff': xoff, 'yoff': yoff, 'xsize': xsize,'ysize': ysize,
-          'xysize': xsize * ysize, 'subset': haveSubset,
-          'totalbands': self.ds.RasterCount
+          'subset': haveSubset, 'totalbands': self.ds.RasterCount
       }
-      self.wAlgorithm.setMetadata( { 'xsize': xsize, 'ysize': ysize } )
 
     def checkSubset():
       def checkOut(size, tcoord, title):
@@ -231,7 +221,7 @@ class WorkerProcessingImage(object):
         if os.path.exists( aux ):
           os.remove( aux )
 
-      dataAlg = WorkerAlgorithms.algorithms_description[ algorithm['name'] ]
+      dataAlg = CollectionAlgorithms.descriptions[ algorithm['name'] ]
       removeOut()
       d = (
         filenameOut, self.metadata['xsize'], self.metadata['ysize'],
@@ -306,9 +296,9 @@ class WorkerProcessingImage(object):
     ds = None
     return { 'isOk': True, 'filename': filenameOut }
 
-class WorkerLocalImage(WorkerProcessingImage):
+class LocalImage(ProcessingImage):
   def __init__(self, idWorker):
-    super(WorkerLocalImage, self).__init__( idWorker )
+    super(LocalImage, self).__init__( idWorker )
     
   def setImage(self, image, subset):
     self._clear()
@@ -323,11 +313,11 @@ class WorkerLocalImage(WorkerProcessingImage):
 
     return self._endSetImage( subset )
 
-class WorkerPLScene(WorkerProcessingImage):
+class PLScene(ProcessingImage):
   PL_API_KEY = os.environ.get('PL_API_KEY')
   
   def __init__(self, idWorker):
-    super(WorkerPLScene, self).__init__( idWorker )
+    super(PLScene, self).__init__( idWorker )
     
   def setImage(self, image, subset):
     if self.PL_API_KEY is None:

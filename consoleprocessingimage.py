@@ -16,26 +16,26 @@ email                : motta dot luiz at gmail.com
 
 import os, sys, argparse, datetime
 
-from workerprocessingimage import WorkerAlgorithms, WorkerLocalImage, WorkerPLScene
+from processingimage import CollectionAlgorithms, LocalImage, PLScene
 
-def setWorkerPLScene(name_image):
-  WorkerPLScene.isKilled = False
+def setPLScene(name_image):
+  PLScene.isKilled = False
   image = {
     'name': name_image,
     'PRODUCT_TYPE': "analytic"
   }
   idWorker = 1
-  return ( WorkerPLScene( idWorker ), image )
+  return ( PLScene( idWorker ), image )
 
-def setWorkerLocal(name_image):
-  WorkerLocalImage.isKilled = False
+def setLocal(name_image):
+  LocalImage.isKilled = False
   image = {
     'name': name_image
   }
   idWorker = 1
-  return ( WorkerLocalImage( idWorker ), image )
+  return ( LocalImage( idWorker ), image )
 
-def run(type_worker, name_image, subsetImage, name_algorithm, band_numbers):
+def run(processing_type, name_image, subsetImage, name_algorithm, band_numbers):
   def printTime(title, t1=None):
     tn =datetime.datetime.now() 
     st = tn.strftime('%Y-%m-%d %H:%M:%S')
@@ -45,7 +45,7 @@ def run(type_worker, name_image, subsetImage, name_algorithm, band_numbers):
 
   def runAlgorithm(algorithm):
     t1 = printTime( "Running '%s'" % algorithm['name'] ) 
-    vreturn = worker.run( algorithm )
+    vreturn = imageProcessing.run( algorithm )
     isOk, msg = True, None
     if not vreturn['isOk']:
       msg = vreturn['msg']
@@ -55,11 +55,11 @@ def run(type_worker, name_image, subsetImage, name_algorithm, band_numbers):
     
     return { 'isOk': isOk, 'msg': msg }
 
-  set_worker = { 'local': setWorkerLocal, 'pl': setWorkerPLScene }
-  ( worker, image ) = set_worker[ type_worker ]( name_image )
+  set_processing = { 'local': setLocal, 'pl': setPLScene }
+  ( imageProcessing, image ) = set_processing[ processing_type ]( name_image )
 
-  printTime( "Setting Dataset '%s'('%s')" % ( image['name'], type_worker ) )
-  vreturn = worker.setImage( image, subsetImage )
+  printTime( "Setting Dataset '%s'('%s')" % ( image['name'], processing_type ) )
+  vreturn = imageProcessing.setImage( image, subsetImage )
   if not vreturn['isOk']:
     print "Error: %s" % vreturn['msg']
     return
@@ -69,24 +69,24 @@ def run(type_worker, name_image, subsetImage, name_algorithm, band_numbers):
     return
 
 def main():
-  type_process = ( 'local', 'pl' )
-  a_d = WorkerAlgorithms.algorithms_description
+  processing_types = ( 'local', 'pl' )
+  a_d = CollectionAlgorithms.descriptions
   d = "Image processing local or server(Planet Labs)."
   parser = argparse.ArgumentParser(description=d )
-  d = "Type of process: %s" % " or ".join( type_process )
-  parser.add_argument('type_process', metavar='type_process', type=str, help=d )
+  d = "Type of process: %s" % " or ".join( processing_types )
+  parser.add_argument('processing_type', metavar='processing_type', type=str, help=d )
   d = 'Name of scene(add extension for local)'
   parser.add_argument('namescene', metavar='name_scene', type=str, help=d )
   d = "Name of algorithm: %s" % ','.join( a_d.keys() )
   parser.add_argument('algorithm', metavar='algorithm', type=str, help=d )
-  d = "Number of bands(separated by comma and no spaces). Ex.: 1,2,3"
+  d = "Number of bands(separated by comma and no spaces). Ex.: 1,2"
   parser.add_argument('bands', metavar='bands', type=str, help=d )
   d = "Two coordinates, Upper Left and Bottom Right, separated by comma. Ex.: x_UL, y_UL, x_BR,y_BR"
   parser.add_argument('-s', metavar='subset', dest='subset', type=str, help=d )
 
   args = parser.parse_args()
-  if not args.type_process in type_process:
-    print "Type of processing '%s' not valid. Valids types: %s" % ( args.type_process, " or ".join( type_process ) )
+  if not args.processing_type in processing_types:
+    print "Type of processing '%s' not valid. Valids types: %s" % ( args.processing_type, " or ".join( processing_types ) )
     return 1
   if not args.algorithm in a_d.keys():
     print "Type of algorithm '%s' not valid." % args.algorithm 
@@ -129,7 +129,7 @@ def main():
       print "Coordinate y_UL '%d' is greater or equal than y_BR '%d'." % ( subsetImage['y_UL'], subsetImage['y_BR'] )
       return 1
 
-  return run( args.type_process, args.namescene, subsetImage, args.algorithm, band_numbers )
+  return run( args.processing_type, args.namescene, subsetImage, args.algorithm, band_numbers )
 
 if __name__ == "__main__":
     sys.exit( main() )
