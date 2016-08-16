@@ -52,7 +52,8 @@ class RegionImage():
       return { 'isOk': False, 'msg': "Image not have Spatial Reference" }
 
     sr = osr.SpatialReference()
-    sr.ImportFromWkt( wktSRS )
+    if not sr.ImportFromWkt( wktSRS ) == 0:
+      return { 'isOk': False, 'msg': "Fail when creating SRS from '%s'" % wktSRS }
     geom = ogr.CreateGeometryFromWkt( wktGeom )
     geom.AssignSpatialReference( sr )
     
@@ -62,11 +63,26 @@ class RegionImage():
     def getGeomWkt4326():
       geom = ogr.CreateGeometryFromWkt( wkt4326 )
       sr = osr.SpatialReference()
-      sr.ImportFromEPSG( 4326 )
+      if not sr.ImportFromEPSG( 4326 ) == 0:
+        return { 'isOk': False, 'msg': "Fail when creating SRS with EPSG 4326" }
       geom.AssignSpatialReference( sr )
-      geom.TransformTo( geomImg.GetSpatialReference() )
-      
-      return geom
+      srImg = geomImg.GetSpatialReference()
+      if not geom.TransformTo( srImg ) == 0:
+        return { 'isOk': False, 'msg': "Fail when transforming SRS 'EPSG 4326' using Image SRS '%s'" % srImg.ExportToWkt() }
+
+      return { 'isOk': True, 'geom': geom }
+    
+    def getWkt4326Img():
+      geom = geomImg.Clone()
+      sr = osr.SpatialReference()
+      if not sr.ImportFromEPSG( 4326 ) == 0:
+        return { 'isOk': False, 'msg': "Error create SRS with EPSG 4326" }
+      if not geom.TransformTo( sr ) == 0:
+        return { 'isOk': False, 'msg': "Error transform SRS using EPSG 4326" }
+      wkt = geom.ExportToWkt()
+      geom.Destroy()
+
+      return { 'isOk': True, 'wkt': wkt }
 
     def getPixelCoordinate(x, y):
       self.ulImage, self.resImage
@@ -77,24 +93,31 @@ class RegionImage():
 
     vreturn = self._getGeom()
     if not vreturn['isOk']:
-      print msg
-      return
+      return vreturn
     geomImg = vreturn['geom']
-    geom = getGeomWkt4326()
-    msg = "Wkt Geom not intersect with image:\nWkt '%s'\nImage = '%s'" % ( wkt4326, self.ds.GetDescription() )
-    if not geomImg.Intersect( geom ):
+    vreturn = getGeomWkt4326()
+    if not vreturn['isOk']:
+      return vreturn
+    geomRegion = vreturn['geom']
+    
+    vreturn = getWkt4326Img()
+    if not vreturn['isOk']:
+      return vreturn
+    data = ( wkt4326, self.ds.GetDescription(), vreturn['wkt'] )
+    msg = "Wkt Geom not intersect with image:\nWkt '%s'\nImage = '%s'\nWkt Image:\n%s" % data
+    if not geomImg.Intersect( geomRegion ):
       geomImg.Destroy()
-      geom.Destroy()
-      return { 'isOk': False, 'msg': msg }
-    geomRegion = geomImg.Intersection( geom )
-    geomImg.Destroy()
-    geom.Destroy()
-    if not geomRegion.GetDimension() == 2:
       geomRegion.Destroy()
       return { 'isOk': False, 'msg': msg }
-
-    ( minX, maxX, minY, maxY )= geomRegion.GetEnvelope()
+    geomInstersection = geomImg.Intersection( geomRegion )
+    geomImg.Destroy()
     geomRegion.Destroy()
+    if not geomInstersection.GetDimension() == 2:
+      geomInstersection.Destroy()
+      return { 'isOk': False, 'msg': msg }
+
+    ( minX, maxX, minY, maxY )= geomInstersection.GetEnvelope()
+    geomInstersection.Destroy()
     
     ul = getPixelCoordinate( minX, maxY )
     br = getPixelCoordinate( maxX, minY )
