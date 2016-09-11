@@ -74,7 +74,7 @@ add_features(){
   fi
 }
 create_scenes_geojson(){
-  # External: geom_id, date1, date2, 
+  # External: geom_id, date1, date2, features
   scenes_geojson="scenes_geom"$geom_id"_"$date1"_"$date2".geojson"
   local header='"type": "FeatureCollection", "crs": { "type": "name", "properties": { "name": "urn:ogc:def:crs:OGC:1.3:CRS84" } }'
   echo '{ '$header',"features": '$features' }' > $scenes_geojson
