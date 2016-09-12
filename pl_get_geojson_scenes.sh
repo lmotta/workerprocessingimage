@@ -39,7 +39,7 @@
 # ***************************************************************************
 #
 create_search_json(){
-  # External: date1, date2, geojson, search_json
+  # External: date1, date2, geojson, search_json, PL_API_KEY
   local filterGeom='{"type": "GeometryFilter","field_name": "geometry","config":'$geojson'}'
   local dates='{"gte": "'$date1'T00:00:00Z","lte": "'$date2'T00:00:00Z" }'
   local filterDate='{"type": "DateRangeFilter","field_name":"catalog::acquired","config":'$dates'}'
@@ -51,7 +51,7 @@ create_search_json(){
   echo "curl --silent --show-error -X POST $headers -u $PL_API_KEY: -d '$data' '$http'" | bash - > $search_json
 }
 add_features(){
-  # External: search_json,features 
+  # External: search_json,features, PL_API_KEY
   local total=$(jq '.["features"] | length' $search_json)
   if [ $total -ne 0 ] ; then
     local properties='id: .id'
@@ -108,6 +108,15 @@ printf "\nProcessing..."
 #
 search_json=$(mktemp)
 create_search_json
+#
+if [ $(jq '.["features"] | length' $search_json) -eq 0 ] ; then
+  rm $search_json
+  msg="Not found features for '"$date1"' until '"$date2"' with '"$geojson"'."
+  printf "\rError: "
+  echo $msg
+  exit 1
+fi
+#
 features=""
 add_features
 rm $search_json
