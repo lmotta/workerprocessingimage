@@ -36,47 +36,6 @@
 # *                                                                         *
 # ***************************************************************************
 #
-create_search_json(){
-  # External: date1, date2, geojson, search_json
-  local filterGeom='{"type": "GeometryFilter","field_name": "geometry","config":'$geojson'}'
-  local dates='{"gte": "'$date1'T00:00:00Z","lte": "'$date2'T00:00:00Z" }'
-  local filterDate='{"type": "DateRangeFilter","field_name":"catalog::acquired","config":'$dates'}'
-  local headers="--header 'Content-Type: application/json' --header 'Accept: application/json'"
-  local http="https://api.planet.com/v1/catalogs/grid-utm-25km/quick-search?_page_size=100"
-  local filter='{"type": "AndFilter","config": ['$filterDate','$filterGeom']}'
-  local filterName='date_geom'
-  local data='{"filter":'$filter',"name": "'$filterName'"}'
-  echo "curl --silent --show-error -X POST $headers -u $PL_API_KEY: -d '$data' '$http'" | bash - > $search_json
-}
-add_features(){
-  # External: search_json,features 
-  local total=$(jq '.["features"] | length' $search_json)
-  if [ $total -ne 0 ] ; then
-    local properties='id: .id'
-    properties+=',satellite_id: .properties["catalog::satellite_id"],grid_cell: .properties["catalog::grid_cell"],provider: .properties["catalog::provider"]'
-    properties+=',resolution: .properties["catalog::resolution"],acquired: .properties["catalog::acquired"]'
-    properties+=',cloud_cover: .properties["catalog::cloud_cover"],usable_data: .properties["catalog::usable_data"]'
-    properties+=',view_angle: .properties["catalog::view_angle"],sun_elevation: .properties["catalog::sun_elevation"],sun_azimuth: .properties["catalog::sun_azimuth"]'
-    local filter='{ "type": "Feature", "properties": {'$properties'}, geometry: .geometry }'  
-    local features_tmp=$(echo "jq '[.[\"features\"][] | $filter ]' $search_json" | bash -)
-    if [ -z "$features" ] ; then
-      features=${features_tmp:1:-1}
-    else
-      features+=","${features_tmp:1:-1}
-    fi
-    local link=$(jq '.["_links"]["_next"]' $search_json | sed 's/"//g')
-    curl --silent --show-error -G $link -u $PL_API_KEY: > $search_json
-    add_features
-  else
-    features="["$features"]"
-  fi
-}
-create_scenes_geojson(){
-  # External: geom_id, date1, date2, 
-  scenes_geojson="scenes_geom"$geom_id"_"$date1"_"$date2".geojson"
-  local header='"type": "FeatureCollection", "crs": { "type": "name", "properties": { "name": "urn:ogc:def:crs:OGC:1.3:CRS84" } }'
-  echo '{ '$header',"features": '$features' }' > $scenes_geojson
-}
 msg_error(){
   local name_script=$(basename $0)
   echo "Total of arguments '"$entryargs"' wrong!"
@@ -108,6 +67,7 @@ jq -c '.["features"][] | .properties["id"],"@@",.geometry,"!!"' $geojson_layer \
 | tr -d '\n' | sed -e $'s/"!!"/\'\\\n/g' \
 | sed -e $'s/"@@"/@\'/g' > $l_scene_geom
 #
+printf "\nProcessing..."
 # Run download
 pids=""
 for item in $(cat $l_scene_geom)
@@ -120,5 +80,5 @@ wait $pids
 total=$(cat $l_scene_geom | wc -l)
 rm $l_scene_geom
 #
-echo "Created regions of scenes (total %d )" $total
+printf "\rCreated regions of scenes (total %d)%-50s\n" $total ' '
 exit 0
