@@ -68,8 +68,20 @@ activate_asset(){
 download_asset(){
   # External: assets_json, projwin, geom_id
   local asset=$1
+  local name_img=$scene_id"_geom"$geom_id"_"$asset
+  local img=$name_img".tif"
   local location=$(jq '.["'$asset'"]["files"]["http"]["location"]' $assets_json | sed 's/"//g')
-  gdal_translate -q -projwin_srs "EPSG:4326" -projwin $projwin "/vsicurl/"$location $scene_id"_geom"$geom_id"_"$asset".tif"
+  gdal_translate -q -projwin_srs "EPSG:4326" -projwin $projwin "/vsicurl/"$location $img
+  # Cutline
+  # ERROR! tem que separar as geometrias
+  #local srs=$(gdalinfo -proj4 -json $img | jq '.["coordinateSystem"]["proj4"]')
+  #local name_proj4=${geojson%.*}"_tmp"
+  #echo "ogr2ogr -select id -t_srs "$srs" "$name_proj4".shp "$geojson | bash -
+  #local img_mask=$name_img"_mask.tif"
+  #echo "gdalwarp -overwrite -dstnodata 0 -srcalpha -cutline "$name_proj4".shp -crop_to_cutline "$img" "$img_mask | bash - > /dev/null
+  #rm -f $name_proj4".*"
+  #rm -f $img
+  #mv $img_mask $img
 }
 msg_error(){
   local name_script=$(basename $0)
@@ -94,6 +106,8 @@ scene_id=$1
 geojson=$2
 geom_id=$3
 #
+printf "\rCreating %s_geo%d(udm and %s).tif..." $scene_id $geom_id $analytic
+#
 set_projwin
 pl1_catalog="https://api.planet.com/v1/catalogs/grid-utm-25km/items/"
 assets_json=$(mktemp)
@@ -106,5 +120,4 @@ download_asset "udm"
 download_asset $analytic
 rm $assets_json
 #
-echo "Created "$scene_id"_geo"$geom_id"(udm and "$analytic").tif"
 exit 0
