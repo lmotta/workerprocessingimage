@@ -156,7 +156,7 @@ class WorkerPLScene(object):
 def main():
   def setWorkerPLScene():
     WorkerPLScene.isKilled = False
-    WorkerPLScene.api_key = "d42ef5b420514ffd8f5c63655ec63739"
+    WorkerPLScene.api_key = "XXX"
     image = { 'SCENE': '20160421_110213_0c53', 'PRODUCT_TYPE': "analytic" }
     idWorker = 1
     return ( WorkerPLScene( idWorker ), image )
